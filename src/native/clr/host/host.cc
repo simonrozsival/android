@@ -1,6 +1,7 @@
 #include <sys/types.h>
 #include <dirent.h>
 #include <dlfcn.h>
+#include <link.h>
 
 #include <cerrno>
 #include <cinttypes>
@@ -28,10 +29,189 @@
 #include <runtime-base/logger.hh>
 #include <runtime-base/monodroid-dl.hh>
 #include <runtime-base/monodroid-state.hh>
+#include <runtime-base/mutex.hh>
 #include <runtime-base/util.hh>
 #include <shared/log_types.hh>
 
 using namespace xamarin::android;
+
+namespace {
+	struct NativeImageEntry
+	{
+		NativeImageEntry *next;
+		char *name;
+		void *handle;
+		host_runtime_contract_native_code_data data;
+	};
+
+	struct NativeImageMapping
+	{
+		std::string_view name;
+		uintptr_t header;
+		uintptr_t bias = 0;
+		size_t extent = 0;
+		const ElfW(Phdr) *phdr = nullptr;
+		size_t phnum = 0;
+
+		bool contains (uintptr_t address, size_t length) const noexcept
+		{
+			for (size_t i = 0; i < phnum; i++) {
+				auto const& segment = phdr[i];
+				if (segment.p_type != PT_LOAD || (segment.p_flags & PF_R) == 0) {
+					continue;
+				}
+				uintptr_t start = bias + segment.p_vaddr;
+				if (address >= start && address - start <= segment.p_memsz && length <= segment.p_memsz - (address - start)) {
+					return true;
+				}
+			}
+			return false;
+		}
+	};
+
+	pthread_mutex_t native_image_lock = PTHREAD_MUTEX_INITIALIZER;
+	NativeImageEntry *native_images = nullptr;
+
+	int find_native_image_mapping (dl_phdr_info *info, [[maybe_unused]] size_t size, void *state)
+	{
+		auto &mapping = *static_cast<NativeImageMapping*> (state);
+		std::string_view path { optional_string (info->dlpi_name) };
+		size_t slash = path.find_last_of ('/');
+		if (slash != std::string_view::npos) {
+			path.remove_prefix (slash + 1);
+		}
+		if (path != mapping.name) {
+			return 0;
+		}
+
+		uintptr_t bias = info->dlpi_addr;
+		size_t extent = 0;
+		bool executable = false;
+		bool zero_based = false;
+		for (size_t i = 0; i < info->dlpi_phnum; i++) {
+			auto const& segment = info->dlpi_phdr[i];
+			if (segment.p_type != PT_LOAD) {
+				continue;
+			}
+			if (segment.p_vaddr > UINTPTR_MAX - bias || segment.p_memsz > UINTPTR_MAX - bias - segment.p_vaddr) {
+				return 1;
+			}
+			size_t end = segment.p_vaddr + segment.p_memsz;
+			if (end > extent) {
+				extent = end;
+			}
+			executable |= (segment.p_flags & PF_X) != 0 && segment.p_memsz != 0;
+			zero_based |= segment.p_vaddr == 0 && segment.p_offset == 0 && (segment.p_flags & PF_R) != 0;
+		}
+		if (!executable || !zero_based || extent == 0) {
+			return 1;
+		}
+		mapping.bias = bias;
+		mapping.extent = extent;
+		mapping.phdr = info->dlpi_phdr;
+		mapping.phnum = info->dlpi_phnum;
+		return 1;
+	}
+
+	bool validate_native_image_header (NativeImageMapping const& mapping) noexcept
+	{
+		// READYTORUN_HEADER and READYTORUN_SECTION from the matching runtime's readytorun.h.
+		constexpr size_t HeaderSize = 16;
+		constexpr size_t SectionSize = 12;
+		if (!mapping.contains (mapping.header, HeaderSize)) {
+			return false;
+		}
+		uint32_t header [4];
+		std::memcpy (header, reinterpret_cast<void*> (mapping.header), sizeof (header));
+		if (header[0] != 0x00525452 || (header[1] & 0xffff) == 0 || (header[2] & 0x20) != 0) {
+			return false;
+		}
+		size_t sections = header[3];
+		if (sections == 0 || sections > (SIZE_MAX - HeaderSize) / SectionSize ||
+		    !mapping.contains (mapping.header, HeaderSize + sections * SectionSize)) {
+			return false;
+		}
+		uint32_t previous_type = 0;
+		for (size_t i = 0; i < sections; i++) {
+			uint32_t section [3];
+			std::memcpy (section, reinterpret_cast<void*> (mapping.header + HeaderSize + i * SectionSize), sizeof (section));
+			if (section[0] <= previous_type || section[1] > mapping.extent || section[2] > mapping.extent - section[1] ||
+			    (section[2] != 0 && !mapping.contains (mapping.bias + section[1], section[2]))) {
+				return false;
+			}
+			previous_type = section[0];
+		}
+		return true;
+	}
+}
+
+bool Host::clr_get_native_code_data (const host_runtime_contract_native_code_context *context, host_runtime_contract_native_code_data *data) noexcept
+{
+	if (context == nullptr || context->size < sizeof (*context) || data == nullptr || data->size < sizeof (*data) ||
+	    context->owner_composite_name == nullptr) {
+		log_errorf (LOG_ASSEMBLY, "ELF ReadyToRun: invalid native code callback context or output");
+		return false;
+	}
+	data->r2r_header_ptr = nullptr;
+	data->image_base = nullptr;
+	data->image_size = 0;
+	std::string_view name { context->owner_composite_name };
+	if (!name.starts_with ("lib") || !name.ends_with (".so") || name.find ('/') != std::string_view::npos ||
+	    name.find ('\\') != std::string_view::npos) {
+		log_errorf (LOG_ASSEMBLY, "ELF ReadyToRun: invalid composite library name '%s' for '%s'", context->owner_composite_name, optional_string (context->assembly_path));
+		return false;
+	}
+
+	lock_guard lock { native_image_lock };
+	for (auto *entry = native_images; entry != nullptr; entry = entry->next) {
+		if (name == entry->name) {
+			*data = entry->data;
+			return true;
+		}
+	}
+
+	// Native images are not JNI libraries. Use the APK/extracted-library search paths without
+	// dispatching System.loadLibrary to the Java main thread.
+	void *handle = AndroidSystem::load_dso_from_any_directories (name, RTLD_NOW | RTLD_LOCAL, false);
+	if (handle == nullptr) {
+		log_errorf (LOG_ASSEMBLY, "ELF ReadyToRun: could not load '%s' for '%s'; see native loader error above", name.data (), optional_string (context->assembly_path));
+		return false;
+	}
+	dlerror ();
+	void *header = dlsym (handle, "RTR_HEADER");
+	const char *error = dlerror ();
+	if (error != nullptr || header == nullptr) {
+		log_errorf (LOG_ASSEMBLY, "ELF ReadyToRun: '%s' does not export RTR_HEADER: %s", name.data (), optional_string (error));
+		dlclose (handle);
+		return false;
+	}
+	NativeImageMapping mapping { .name = name, .header = reinterpret_cast<uintptr_t> (header) };
+	dl_iterate_phdr (find_native_image_mapping, &mapping);
+	if (mapping.phdr == nullptr || !validate_native_image_header (mapping)) {
+		log_errorf (LOG_ASSEMBLY, "ELF ReadyToRun: '%s' has no executable mapped image or has an invalid RTR_HEADER/section range", name.data ());
+		dlclose (handle);
+		return false;
+	}
+	auto *entry = static_cast<NativeImageEntry*> (std::malloc (sizeof (NativeImageEntry)));
+	if (entry == nullptr) {
+		log_errorf (LOG_ASSEMBLY, "ELF ReadyToRun: could not allocate native image cache entry for '%s'", name.data ());
+		dlclose (handle);
+		return false;
+	}
+	entry->name = Util::duplicate_string (name.data ());
+	entry->handle = handle;
+	entry->data = {
+		.size = sizeof (*data),
+		.r2r_header_ptr = header,
+		.image_size = mapping.extent,
+		.image_base = reinterpret_cast<void*> (mapping.bias),
+	};
+	entry->next = native_images;
+	native_images = entry; // Keep the handle and mapping alive for the entire process.
+	*data = entry->data;
+	log_debugf (LOG_ASSEMBLY, "ELF ReadyToRun: loaded '%s', RTR_HEADER=%p, load bias=%p, extent=%zu", name.data (), header, data->image_base, data->image_size);
+	return true;
+}
 
 void Host::clr_error_writer (const char *message) noexcept
 {

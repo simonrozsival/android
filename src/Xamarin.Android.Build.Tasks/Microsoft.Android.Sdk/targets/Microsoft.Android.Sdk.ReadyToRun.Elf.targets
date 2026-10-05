@@ -1,0 +1,93 @@
+<Project>
+  <!-- Local experiment only: an explicit compiler override applies to both PE and ELF controls. -->
+  <Target Name="_AndroidReadyToRunLocalCompiler"
+      AfterTargets="ResolveReadyToRunCompilers"
+      Condition=" '$(PublishReadyToRun)' == 'true' and '$(_AndroidReadyToRunCrossgen2)' != '' ">
+    <Error Condition=" !Exists('$(_AndroidReadyToRunCrossgen2)') "
+        Text="The experimental local crossgen2 compiler does not exist: $(_AndroidReadyToRunCrossgen2)" />
+    <PropertyGroup>
+      <_AndroidReadyToRunLocalRuntimeConfiguration>$(_DotNetRuntimeConfiguration)</_AndroidReadyToRunLocalRuntimeConfiguration>
+      <_AndroidReadyToRunLocalRuntimeConfiguration Condition=" '$(_AndroidReadyToRunLocalRuntimeConfiguration)' == '' ">Release</_AndroidReadyToRunLocalRuntimeConfiguration>
+      <_AndroidReadyToRunLocalRuntimePack>$(_CLRLocalRuntimePath)/artifacts/bin/microsoft.netcore.app.runtime.$(RuntimeIdentifier)/$(_AndroidReadyToRunLocalRuntimeConfiguration)</_AndroidReadyToRunLocalRuntimePack>
+    </PropertyGroup>
+    <Error Condition=" '$(_CLRLocalRuntimePath)' != '' and !Exists('$(_AndroidReadyToRunLocalRuntimePack)/data/RuntimeList.xml') "
+        Text="The experimental local runtime pack is missing or incomplete: $(_AndroidReadyToRunLocalRuntimePack). Refusing to use the stock runtime with the local compiler." />
+    <ItemGroup>
+      <_AndroidReadyToRunOriginalCompiler Include="@(Crossgen2Tool)" />
+      <Crossgen2Tool Remove="@(Crossgen2Tool)" />
+      <Crossgen2Tool Include="@(_AndroidReadyToRunOriginalCompiler->'$(_AndroidReadyToRunCrossgen2)')"
+          DotNetHostPath="$(_AndroidReadyToRunCrossgen2Host)" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="_AndroidReadyToRunElfInputs"
+      AfterTargets="_PrepareForReadyToRunCompilation"
+      BeforeTargets="_CreateR2RImages"
+      Condition=" '$(_AndroidReadyToRunElf)' == 'true' and '$(PublishReadyToRun)' == 'true' ">
+    <Error Condition=" '$(_AndroidRuntime)' != 'CoreCLR' or '$(PublishReadyToRunComposite)' != 'true' or '$(RuntimeIdentifier)' != 'android-arm64' "
+        Text="The experimental ELF path requires CoreCLR composite ReadyToRun and android-arm64." />
+    <Error Condition=" '$(_AndroidReadyToRunCrossgen2)' == '' or '$(_CLRLocalRuntimePath)' == '' "
+        Text="The experimental ELF path requires a matching local runtime and crossgen2 compiler." />
+    <Error Condition=" '@(_ReadyToRunCompileList->Count())' != '1' or '%(_ReadyToRunCompileList.CreateCompositeImage)' != 'true' "
+        Text="The experimental ELF path supports one composite and no separately compiled exclusions." />
+    <PropertyGroup>
+      <_AndroidReadyToRunElfName>lib$(AssemblyName).r2r.so</_AndroidReadyToRunElfName>
+      <_AndroidReadyToRunElfLibrary>$(_ReadyToRunOutputPath)/$(_AndroidReadyToRunElfName)</_AndroidReadyToRunElfLibrary>
+      <_AndroidReadyToRunElfObject>$(_AndroidReadyToRunElfLibrary).o</_AndroidReadyToRunElfObject>
+      <_AndroidReadyToRunElfLinkerScript>$(_AndroidReadyToRunElfObject).ld</_AndroidReadyToRunElfLinkerScript>
+      <_AndroidReadyToRunElfOriginalOutput>%(_ReadyToRunCompileList.OutputR2RImage)</_AndroidReadyToRunElfOriginalOutput>
+      <PublishReadyToRunContainerFormat>elf</PublishReadyToRunContainerFormat>
+      <_AndroidReadyToRunElfNdkHost Condition=" $([MSBuild]::IsOSPlatform('osx')) ">darwin-x86_64</_AndroidReadyToRunElfNdkHost>
+      <_AndroidReadyToRunElfNdkHost Condition=" $([MSBuild]::IsOSPlatform('linux')) ">linux-x86_64</_AndroidReadyToRunElfNdkHost>
+      <_AndroidReadyToRunElfNdkHost Condition=" $([MSBuild]::IsOSPlatform('windows')) ">windows-x86_64</_AndroidReadyToRunElfNdkHost>
+      <_AndroidReadyToRunElfNdkExtension Condition=" $([MSBuild]::IsOSPlatform('windows')) ">.cmd</_AndroidReadyToRunElfNdkExtension>
+      <_AndroidReadyToRunElfLinker>$(_AndroidNdkDirectory)toolchains/llvm/prebuilt/$(_AndroidReadyToRunElfNdkHost)/bin/aarch64-linux-android$(AndroidNdkApiLevel_Arm64)-clang$(_AndroidReadyToRunElfNdkExtension)</_AndroidReadyToRunElfLinker>
+      <_AndroidReadyToRunElfPublishedLibrary>$(_AndroidReadyToRunElfLibrary)</_AndroidReadyToRunElfPublishedLibrary>
+      <_AndroidReadyToRunElfPublishedLibrary Condition=" '$(AndroidIncludeDebugSymbols)' != 'true' and '$(StripSymbols)' != 'false' ">$(_ReadyToRunOutputPath)/stripped/$(_AndroidReadyToRunElfName)</_AndroidReadyToRunElfPublishedLibrary>
+      <_AndroidReadyToRunElfStripper>$(_AndroidNdkDirectory)toolchains/llvm/prebuilt/$(_AndroidReadyToRunElfNdkHost)/bin/llvm-strip</_AndroidReadyToRunElfStripper>
+      <_AndroidReadyToRunElfStripper Condition=" $([MSBuild]::IsOSPlatform('windows')) ">$(_AndroidReadyToRunElfStripper).exe</_AndroidReadyToRunElfStripper>
+    </PropertyGroup>
+    <Error Condition=" !Exists('$(_AndroidReadyToRunElfLinker)') "
+        Text="The experimental ELF path requires the Android NDK arm64 linker: $(_AndroidReadyToRunElfLinker)" />
+    <Error Condition=" '$(AndroidIncludeDebugSymbols)' != 'true' and '$(StripSymbols)' != 'false' and !Exists('$(_AndroidReadyToRunElfStripper)') "
+        Text="The experimental ELF path requires the Android NDK native stripper: $(_AndroidReadyToRunElfStripper)" />
+    <ItemGroup>
+      <_ReadyToRunCompileList Update="@(_ReadyToRunCompileList)" OutputR2RImage="$(_AndroidReadyToRunElfObject)" />
+      <!-- The component assemblies stay PE. Only the composite owner enters native packaging. -->
+      <_ReadyToRunFilesToPublish Remove="$(_AndroidReadyToRunElfOriginalOutput)" />
+      <_ReadyToRunFilesToPublish Include="$(_AndroidReadyToRunElfPublishedLibrary)"
+          RelativePath="$(_AndroidReadyToRunElfName)"
+          RuntimeIdentifier="$(RuntimeIdentifier)"
+          AssetType="native"
+          CopyToPublishDirectory="PreserveNewest" />
+      <FileWrites Include="$(_AndroidReadyToRunElfObject);$(_AndroidReadyToRunElfLinkerScript)" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="_AndroidLinkReadyToRunElf"
+      AfterTargets="_CreateR2RImages"
+      Condition=" '$(_AndroidReadyToRunElf)' == 'true' and '$(PublishReadyToRun)' == 'true' "
+      Inputs="$(_AndroidReadyToRunElfObject);$(_AndroidReadyToRunElfLinkerScript);$(_AndroidReadyToRunElfLinker);$(MSBuildThisFileFullPath)"
+      Outputs="$(_AndroidReadyToRunElfLibrary)">
+    <Error Condition=" !Exists('$(_AndroidReadyToRunElfObject)') or !Exists('$(_AndroidReadyToRunElfLinkerScript)') "
+        Text="The ELF compiler did not produce both its native object and RVA linker script." />
+    <Exec Command="&quot;$(_AndroidReadyToRunElfLinker)&quot; -shared &quot;$(_AndroidReadyToRunElfObject)&quot; -o &quot;$(_AndroidReadyToRunElfLibrary)&quot; -Wl,-T,&quot;$(_AndroidReadyToRunElfLinkerScript)&quot; -Wl,-soname,$(_AndroidReadyToRunElfName) -Wl,--no-relax -Wl,--no-undefined -Wl,--icf=none -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384" />
+    <ItemGroup>
+      <FileWrites Include="$(_AndroidReadyToRunElfLibrary)" />
+    </ItemGroup>
+  </Target>
+
+  <!-- Keep the linked image for diagnostic symbols; publish only the stripped native owner.
+       NativeLinker uses the same debug/unneeded-symbol policy. No image RVAs are relinked. -->
+  <Target Name="_AndroidStripReadyToRunElf"
+      AfterTargets="_AndroidLinkReadyToRunElf"
+      Condition=" '$(_AndroidReadyToRunElf)' == 'true' and '$(PublishReadyToRun)' == 'true' and '$(AndroidIncludeDebugSymbols)' != 'true' and '$(StripSymbols)' != 'false' "
+      Inputs="$(_AndroidReadyToRunElfLibrary);$(_AndroidReadyToRunElfStripper);$(MSBuildThisFileFullPath)"
+      Outputs="$(_AndroidReadyToRunElfPublishedLibrary)">
+    <MakeDir Directories="$(_ReadyToRunOutputPath)/stripped" />
+    <Exec Command="&quot;$(_AndroidReadyToRunElfStripper)&quot; --strip-debug --strip-unneeded &quot;$(_AndroidReadyToRunElfLibrary)&quot; -o &quot;$(_AndroidReadyToRunElfPublishedLibrary)&quot;" />
+    <ItemGroup>
+      <FileWrites Include="$(_AndroidReadyToRunElfPublishedLibrary)" />
+    </ItemGroup>
+  </Target>
+</Project>

@@ -115,6 +115,9 @@ class NativeLinker
 		}
 
 		extraArgs.Add ($"-z max-page-size={maxPageSize}");
+		if (abi is "arm64" or "arm64-v8a" or "aarch64" or "x86_64") {
+			extraArgs.Add ($"-z common-page-size={maxPageSize}");
+		}
 
 		string? nativeLibsDir = MonoAndroidHelper.GetRuntimePackNativeLibDir (MonoAndroidHelper.AbiToTargetArch (abi), runtimePackLibDirs);
 		if (!nativeLibsDir.IsNullOrEmpty ()) {

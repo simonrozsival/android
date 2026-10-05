@@ -36,6 +36,7 @@ namespace xamarin::android {
 		static void scan_filesystem_for_assemblies_and_libraries () noexcept;
 
 		static bool clr_external_assembly_probe (const char *path, void **data_start, int64_t *size) noexcept;
+		static bool clr_get_native_code_data (const host_runtime_contract_native_code_context *context, host_runtime_contract_native_code_data *data) noexcept;
 		static const void* clr_pinvoke_override (const char *library_name, const char *entry_point_name) noexcept;
 		static void clr_error_writer (const char *message) noexcept;
 
@@ -61,6 +62,7 @@ namespace xamarin::android {
 			.bundle_probe = nullptr,
 			.pinvoke_override = clr_pinvoke_override,
 			.external_assembly_probe = clr_external_assembly_probe,
+			.get_native_code_data = clr_get_native_code_data,
 		};
 
 		// Enough to fit 0xffffffffffffffff + terminating NUL

@@ -137,6 +137,11 @@ else()
   set(USES_LIBSTDCPP True)
 endif()
 
+if(ANDROID_ABI STREQUAL "arm64-v8a" OR ANDROID_ABI STREQUAL "x86_64")
+  # Align both LOAD segments and the end of RELRO for 16 KiB Android pages.
+  add_link_options(LINKER:-z,max-page-size=16384 LINKER:-z,common-page-size=16384)
+endif()
+
 set(SHARED_LIB_NAME xa::shared)
 
 #

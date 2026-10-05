@@ -120,4 +120,5 @@ This file contains the CoreCLR-specific MSBuild logic for .NET for Android.
       <FileWrites Include="$(_AndroidMibcProfile)" />
     </ItemGroup>
   </Target>
+  <Import Project="Microsoft.Android.Sdk.ReadyToRun.Elf.targets" />
 </Project>
