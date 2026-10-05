@@ -286,7 +286,7 @@ def main():
     parser.add_argument("app", type=Path)
     parser.add_argument("artifacts", type=Path)
     args = parser.parse_args()
-    name = "ReadyToRunEnvelope.Maui" if args.app.name == "Maui" else "ReadyToRunEnvelope"
+    name = "ReadyToRunEnvelope"
     owner = f"lib{name}.r2r.so"
     pe = args.app / "obj/pe/Release/net11.0-android/android-arm64"
     native = args.app / "obj/elf/Release/net11.0-android/android-arm64"

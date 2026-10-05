@@ -27,7 +27,9 @@ the unstripped published image. The strip step is incremental and does not relin
 The Android host loads native images through its normal APK/extracted-native-library
 search paths, validates their mapped header and section ranges, and retains each
 handle for the process lifetime. Its runtime contract returns the ELF load bias and
-maximum `PT_LOAD` virtual end. Failures are explicitly logged; the runtime does not
+maximum `PT_LOAD` virtual end. CoreCLR serializes composite loading and caches
+native images by owner name; the Android callback does not maintain a second cache.
+Failures are explicitly logged; the runtime does not
 silently fall back to JIT when a platform-native composite cannot be opened.
 The existing uncompressed assembly-store `malloc`/`memcpy` workaround and compressed
 assembly handling are deliberately unchanged.
@@ -81,26 +83,15 @@ The simple app uses a no-action-bar theme and applies system-bar/display-cutout
 insets to its shared root layout in both envelopes. This keeps startup text and
 the diagnostic finish button usable with target-35+ enforced edge-to-edge layout.
 
-`tests/Performance/ReadyToRunEnvelope/build-pair.sh` builds both simple and MAUI
-envelopes plus the simple ELF diagnostic APK, recording exact commands, binlogs,
+`tests/Performance/ReadyToRunEnvelope/build-pair.sh` builds the simple PE and ELF
+envelopes plus the ELF diagnostic APK, recording exact commands, binlogs,
 text logs, and APK hashes in a caller-supplied absolute artifact directory:
 
 ```sh
 bash tests/Performance/ReadyToRunEnvelope/build-pair.sh "$RUNTIME" "$CROSSGEN2" "$ARTIFACTS"
 python3 tests/Performance/ReadyToRunEnvelope/verify-pair.py \
   tests/Performance/ReadyToRunEnvelope/Simple "$ARTIFACTS"
-python3 tests/Performance/ReadyToRunEnvelope/verify-pair.py \
-  tests/Performance/ReadyToRunEnvelope/Maui "$ARTIFACTS"
 ```
-
-The minimal programmatic MAUI app uses the same MAUI 10.0.41 package in both
-variants, targeting `net11.0-android` on the local SDK. The previously available
-MAUI 11 preview packages referenced Java.Interop 99.61 and could not compile
-against this Android source's Java.Interop 11; their reference metadata is not
-rewritten. A compatible MAUI workload SDK must be available to the local
-dotnet installation. Its run-owned package is
-`com.github.copilot.r2renvelope.cc24e062.maui` and activity is
-`com.github.copilot.r2renvelope.maui.MainActivity`.
 
 Build a separate diagnostic APK with `_AndroidReadyToRunEnvelopeDiagnostic=true`
 and a third intermediate/output directory. This keeps Release, trimming, R2R,

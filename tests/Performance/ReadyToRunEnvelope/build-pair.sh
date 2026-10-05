@@ -21,15 +21,11 @@ cd "$ROOT"
 
 build_variant ()
 {
-	local app="$1" variant="$2" elf="$3" diagnostic="$4"
-	local source="$ROOT/tests/Performance/ReadyToRunEnvelope/$app"
+	local variant="$1" elf="$2" diagnostic="$3"
+	local source="$ROOT/tests/Performance/ReadyToRunEnvelope/Simple"
 	local project="ReadyToRunEnvelope.csproj"
 	local package="com.github.copilot.r2renvelope.cc24e062.simple"
-	if [[ "$app" == "Maui" ]]; then
-		project="ReadyToRunEnvelope.Maui.csproj"
-		package="com.github.copilot.r2renvelope.cc24e062.maui"
-	fi
-	local name="$app-$variant"
+	local name="Simple-$variant"
 	local command=(
 		"$ROOT/dotnet-local.sh" build "$source/$project"
 		-c Release -t:SignAndroidPackage -nr:false -v minimal
@@ -60,8 +56,6 @@ build_variant ()
 	echo "$OUTPUT/$name.apk"
 }
 
-build_variant Simple pe false false
-build_variant Simple elf true false
-build_variant Simple elf-diagnostic true true
-build_variant Maui pe false false
-build_variant Maui elf true false
+build_variant pe false false
+build_variant elf true false
+build_variant elf-diagnostic true true

@@ -29,21 +29,12 @@
 #include <runtime-base/logger.hh>
 #include <runtime-base/monodroid-dl.hh>
 #include <runtime-base/monodroid-state.hh>
-#include <runtime-base/mutex.hh>
 #include <runtime-base/util.hh>
 #include <shared/log_types.hh>
 
 using namespace xamarin::android;
 
 namespace {
-	struct NativeImageEntry
-	{
-		NativeImageEntry *next;
-		char *name;
-		void *handle;
-		host_runtime_contract_native_code_data data;
-	};
-
 	struct NativeImageMapping
 	{
 		std::string_view name;
@@ -68,9 +59,6 @@ namespace {
 			return false;
 		}
 	};
-
-	pthread_mutex_t native_image_lock = PTHREAD_MUTEX_INITIALIZER;
-	NativeImageEntry *native_images = nullptr;
 
 	int find_native_image_mapping (dl_phdr_info *info, [[maybe_unused]] size_t size, void *state)
 	{
@@ -162,14 +150,6 @@ bool Host::clr_get_native_code_data (const host_runtime_contract_native_code_con
 		return false;
 	}
 
-	lock_guard lock { native_image_lock };
-	for (auto *entry = native_images; entry != nullptr; entry = entry->next) {
-		if (name == entry->name) {
-			*data = entry->data;
-			return true;
-		}
-	}
-
 	// Native images are not JNI libraries. Use the APK/extracted-library search paths without
 	// dispatching System.loadLibrary to the Java main thread.
 	void *handle = AndroidSystem::load_dso_from_any_directories (name, RTLD_NOW | RTLD_LOCAL, false);
@@ -192,23 +172,13 @@ bool Host::clr_get_native_code_data (const host_runtime_contract_native_code_con
 		dlclose (handle);
 		return false;
 	}
-	auto *entry = static_cast<NativeImageEntry*> (std::malloc (sizeof (NativeImageEntry)));
-	if (entry == nullptr) {
-		log_errorf (LOG_ASSEMBLY, "ELF ReadyToRun: could not allocate native image cache entry for '%s'", name.data ());
-		dlclose (handle);
-		return false;
-	}
-	entry->name = Util::duplicate_string (name.data ());
-	entry->handle = handle;
-	entry->data = {
+	// CoreCLR caches the native image. Keep the dlopen reference alive for its mapped pointers.
+	*data = {
 		.size = sizeof (*data),
 		.r2r_header_ptr = header,
 		.image_size = mapping.extent,
 		.image_base = reinterpret_cast<void*> (mapping.bias),
 	};
-	entry->next = native_images;
-	native_images = entry; // Keep the handle and mapping alive for the entire process.
-	*data = entry->data;
 	log_debugf (LOG_ASSEMBLY, "ELF ReadyToRun: loaded '%s', RTR_HEADER=%p, load bias=%p, extent=%zu", name.data (), header, data->image_base, data->image_size);
 	return true;
 }
