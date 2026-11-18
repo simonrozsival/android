@@ -1,0 +1,36 @@
+<Project>
+  <!-- Imported after the SDK only for an explicitly selected local compiler.
+       Preserve its RunReadyToRunCompiler invocation/error outputs, but track the native
+       sidecar and component outputs which the SDK's PE/Mach-O target does not declare. -->
+  <Target Name="_CreateR2RImages"
+      DependsOnTargets="_AndroidReadyToRunCompilationInputs"
+      Inputs="$(MSBuildAllProjects);$(MSBuildThisFileFullPath);@(_ReadyToRunCompileList);@(_ReadyToRunCompositeBuildInput);@(_ReadyToRunPgoFiles)"
+      Outputs="%(_ReadyToRunCompileList.OutputR2RImage);%(_ReadyToRunCompileList.OutputPDBImage);@(_AndroidReadyToRunComponentOutput);@(_AndroidReadyToRunSidecarOutput)">
+    <RunReadyToRunCompiler
+        CrossgenTool="@(CrossgenTool)"
+        Crossgen2Tool="@(Crossgen2Tool)"
+        UseCrossgen2="$(PublishReadyToRunUseCrossgen2)"
+        Crossgen2PgoFiles="@(_ReadyToRunPgoFiles)"
+        Crossgen2ContainerFormat="$(PublishReadyToRunContainerFormat)"
+        Crossgen2ExtraCommandLineArgs="$(PublishReadyToRunCrossgen2ExtraArgs);$(_PublishReadyToRunCrossgen2ExtraArgs)"
+        Crossgen2CompositeExtraCommandLineArgs="$(PublishReadyToRunCrossgen2CompositeExtraArgs)"
+        ImplementationAssemblyReferences="@(_ReadyToRunAssembliesToReference)"
+        ShowCompilerWarnings="$(PublishReadyToRunShowWarnings)"
+        CompilationEntry="@(_ReadyToRunCompileList)"
+        ContinueOnError="ErrorAndContinue"
+        ReadyToRunCompositeBuildReferences="@(_ReadyToRunCompositeBuildReferences)"
+        ReadyToRunCompositeBuildInput="@(_ReadyToRunCompositeBuildInput)"
+        ReadyToRunCompositeUnrootedBuildInput="@(_ReadyToRunCompositeUnrootedBuildInput)">
+      <Output TaskParameter="ExitCode" PropertyName="_ReadyToRunCompilerExitCode" />
+      <Output TaskParameter="WarningsDetected" PropertyName="_ReadyToRunWarningsDetected" />
+    </RunReadyToRunCompiler>
+    <PropertyGroup>
+      <_AndroidReadyToRunCompilerSucceeded>$(MSBuildLastTaskResult)</_AndroidReadyToRunCompilerSucceeded>
+      <_ReadyToRunCompilerHasWarnings Condition=" '$(_ReadyToRunWarningsDetected)' == 'true' ">true</_ReadyToRunCompilerHasWarnings>
+    </PropertyGroup>
+    <ItemGroup>
+      <_ReadyToRunCompilationFailures Include="@(_ReadyToRunCompileList)"
+          Condition=" '$(_AndroidReadyToRunCompilerSucceeded)' == 'false' or ('$(_ReadyToRunCompilerExitCode)' != '' and $(_ReadyToRunCompilerExitCode) != 0) " />
+    </ItemGroup>
+  </Target>
+</Project>

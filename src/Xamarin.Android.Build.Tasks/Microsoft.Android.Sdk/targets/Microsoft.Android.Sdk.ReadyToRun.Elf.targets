@@ -64,9 +64,47 @@
     </ItemGroup>
   </Target>
 
+  <!-- Property and input-set changes cannot be detected by timestamps alone. Compare this
+       small settings record on every tracked build, leaving its timestamp unchanged otherwise.
+       Keep tracking after returning to the stock compiler so shared component DLLs cannot
+       retain the previous envelope or compiler's forwarding metadata. -->
+  <Target Name="_AndroidReadyToRunCompilationInputs"
+      BeforeTargets="_CreateR2RImages"
+      Condition=" '$(PublishReadyToRun)' == 'true' and ('$(_AndroidReadyToRunCrossgen2)' != '' or Exists('$(_ReadyToRunOutputPath)/compilation.inputs')) ">
+    <PropertyGroup>
+      <_AndroidReadyToRunCompilationSettings>$(_ReadyToRunOutputPath)/compilation.inputs</_AndroidReadyToRunCompilationSettings>
+    </PropertyGroup>
+    <ItemGroup>
+      <_AndroidReadyToRunCompilationSetting Include="Container=$(PublishReadyToRunContainerFormat);Composite=$(PublishReadyToRunComposite);UseCrossgen2=$(PublishReadyToRunUseCrossgen2);Runtime=$(_CLRLocalRuntimePath);RuntimeConfiguration=$(_DotNetRuntimeConfiguration)" />
+      <_AndroidReadyToRunCompilationSetting Include="@(Crossgen2Tool->'Compiler=%(FullPath)|%(DotNetHostPath)|%(TargetOS)|%(TargetArch)|%(JitPath)|%(PerfmapFormatVersion)')" />
+      <_AndroidReadyToRunCompilationSetting Include="@(CrossgenTool->'Crossgen=%(FullPath)|%(JitPath)')" />
+      <_AndroidReadyToRunCompilationSetting Include="CompilerArgs=$(PublishReadyToRunCrossgen2ExtraArgs);SdkCompilerArgs=$(_PublishReadyToRunCrossgen2ExtraArgs);CompositeArgs=$(PublishReadyToRunCrossgen2CompositeExtraArgs)" />
+      <_AndroidReadyToRunCompilationSetting Include="@(_ReadyToRunCompileList->'Compile=%(FullPath)|%(OutputR2RImage)|%(OutputPDBImage)|%(CreateCompositeImage)|%(PartialCompile)|%(EmitSymbols)')" />
+      <_AndroidReadyToRunCompilationSetting Include="@(_ReadyToRunCompositeBuildInput->'CompositeInput=%(FullPath)');@(_ReadyToRunCompositeUnrootedBuildInput->'UnrootedInput=%(FullPath)');@(_ReadyToRunCompositeBuildReferences->'CompositeReference=%(FullPath)');@(_ReadyToRunAssembliesToReference->'Reference=%(FullPath)');@(_ReadyToRunPgoFiles->'Profile=%(FullPath)')" />
+      <_AndroidReadyToRunCompilerInput Include="$(MSBuildThisFileFullPath);@(Crossgen2Tool);@(CrossgenTool);@(Crossgen2Tool->'%(DotNetHostPath)');@(Crossgen2Tool->'%(JitPath)');@(CrossgenTool->'%(JitPath)')" />
+      <_AndroidReadyToRunCompilerInput Include="@(_ReadyToRunAssembliesToReference);@(_ReadyToRunCompositeBuildReferences);@(_ReadyToRunCompositeUnrootedBuildInput)" />
+      <_AndroidReadyToRunComponentOutput Include="@(_ReadyToRunFilesToPublish)"
+          Condition=" '$(PublishReadyToRunComposite)' == 'true' and '%(_ReadyToRunFilesToPublish.Extension)' == '.dll' " />
+      <_AndroidReadyToRunSidecarOutput Include="$(_AndroidReadyToRunElfLinkerScript)"
+          Condition=" '$(_AndroidReadyToRunElf)' == 'true' " />
+    </ItemGroup>
+    <MakeDir Directories="$(_ReadyToRunOutputPath)" />
+    <WriteLinesToFile File="$(_AndroidReadyToRunCompilationSettings)"
+        Lines="@(_AndroidReadyToRunCompilationSetting)"
+        Overwrite="true" WriteOnlyWhenDifferent="true" />
+    <PropertyGroup>
+      <!-- The stock SDK compilation target has no extensible Inputs property. This also
+           invalidates it when an experimental build returns to the stock compiler. -->
+      <MSBuildAllProjects>$(MSBuildAllProjects);$(_AndroidReadyToRunCompilationSettings);@(_AndroidReadyToRunCompilerInput)</MSBuildAllProjects>
+    </PropertyGroup>
+    <ItemGroup>
+      <FileWrites Include="$(_AndroidReadyToRunCompilationSettings);@(_AndroidReadyToRunComponentOutput);@(_AndroidReadyToRunSidecarOutput)" />
+    </ItemGroup>
+  </Target>
+
   <Target Name="_AndroidLinkReadyToRunElf"
       AfterTargets="_CreateR2RImages"
-      Condition=" '$(_AndroidReadyToRunElf)' == 'true' and '$(PublishReadyToRun)' == 'true' "
+      Condition=" '$(_AndroidReadyToRunElf)' == 'true' and '$(PublishReadyToRun)' == 'true' and '@(_ReadyToRunCompilationFailures->Count())' == '0' "
       Inputs="$(_AndroidReadyToRunElfObject);$(_AndroidReadyToRunElfLinkerScript);$(_AndroidReadyToRunElfLinker);$(MSBuildThisFileFullPath)"
       Outputs="$(_AndroidReadyToRunElfLibrary)">
     <Error Condition=" !Exists('$(_AndroidReadyToRunElfObject)') or !Exists('$(_AndroidReadyToRunElfLinkerScript)') "

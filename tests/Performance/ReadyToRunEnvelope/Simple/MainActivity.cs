@@ -19,6 +19,7 @@ public class MainActivity : Activity
 		var text = new TextView (this) { Text = CreateStartupText (), TextSize = 24 };
 		layout.AddView (text);
 #if R2R_DIAGNOSTIC
+		// Trace finalization is not proof of clean native shutdown (HWUI can race process exit).
 		var finish = new Button (this) { Text = "Finish diagnostic trace" };
 		finish.Click += (sender, args) => System.Environment.Exit (0);
 		layout.AddView (finish);

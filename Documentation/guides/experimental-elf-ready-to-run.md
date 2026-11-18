@@ -24,6 +24,18 @@ unstripped image remains in `R2R/` for diagnostics; the published owner is in
 `R2R/stripped/`. `AndroidIncludeDebugSymbols=true` or `StripSymbols=false` retains
 the unstripped published image. The strip step is incremental and does not relink.
 
+For an explicitly selected local compiler, a late Android target reuses the SDK's
+`RunReadyToRunCompiler` task with a complete output contract: the composite,
+forwarding component DLLs, and ELF RVA script. A persisted settings record tracks
+envelope, compiler/host selection, arguments, and input membership; compiler,
+host, JIT, and reference files participate in timestamp checks. Returning to the
+stock compiler still tracks the existing record, while ordinary builds that
+never selected a local compiler keep the stock SDK target unchanged.
+Changing PE/ELF in the same intermediate directory, rebuilding the compiler,
+or deleting a component or RVA script therefore regenerates the required outputs.
+Unchanged settings leave the record's timestamp unchanged. The record is updated
+on every tracked build because property changes cannot be detected by file timestamps.
+
 The Android host loads native images through its normal APK/extracted-native-library
 search paths, validates their mapped header and section ranges, and retains each
 handle for the process lifetime. Its runtime contract returns the ELF load bias and
@@ -103,8 +115,15 @@ Extract event 159 (`R2RGetEntryPoint`) for `MainActivity.CreateStartupText` and 
 its nonzero `EntryPoint` to the ELF RX mapping. `run-as` can read this app's maps
 and trace in the diagnostic build. Stop/flush tracing before reading the complete
 trace; force-stopping the process is not a guaranteed flush.
-The diagnostic-only "Finish diagnostic trace" button exits through
-`System.Environment.Exit(0)` so the runtime can shut down tracing normally.
+The diagnostic-only "Finish diagnostic trace" button calls
+`System.Environment.Exit(0)` to finalize tracing before the trace is collected.
+**This is not a clean native-shutdown assertion.** Actual 16-KiB-kernel validation
+observed a destroyed-mutex/SIGABRT in system HWUI worker threads during this exit,
+in both an ELF diagnostic and a PE diagnostic control, across multiple graphics
+backends. Exit code zero and a readable finalized trace do not negate those fatal
+logs. Preserve and classify the shutdown logs separately from startup, GC/EH, and
+native-entrypoint evidence. Normal Android Activity finish passed in both variants
+but leaves the process alive and is not equivalent to managed process termination.
 Before readiness it also runs non-inlined compacting-GC, generic-identity, and
 throw/catch checks and requires the explicit log
 `DIAGNOSTIC CHECKS PASSED GC=1024 GENERIC=ELF EH=17`. Correlate those methods'
